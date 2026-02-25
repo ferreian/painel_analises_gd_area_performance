@@ -1,0 +1,20 @@
+[server]
+headless = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#005FAE"
+backgroundColor = "#F0F2F6"
+secondaryBackgroundColor = "#E8EAF0"
+textColor = "#231F20"
+font = "sans serif"
+
+[runner]
+magicEnabled = true
+
+[client]
+showErrorDetails = false
+# toolbarMode = "minimal"

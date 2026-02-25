@@ -1,5 +1,5 @@
 [server]
-headless = false
+headless = true
 
 [browser]
 gatherUsageStats = false
@@ -17,4 +17,3 @@ magicEnabled = true
 
 [client]
 showErrorDetails = false
-# toolbarMode = "minimal"

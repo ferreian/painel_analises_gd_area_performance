@@ -1,5 +1,8 @@
 import streamlit as st
 import pandas as pd
+import os
+from pathlib import Path
+from dotenv import load_dotenv
 from supabase import create_client
 import plotly.express as px
 import plotly.graph_objects as go
@@ -19,8 +22,15 @@ if "pagina" not in st.session_state:
     st.session_state["pagina"] = "areas"
 
 # ── Credenciais ──────────────────────────────────────────
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+except Exception:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 # ── Paleta Stine ─────────────────────────────────────────
 COR_MILHO     = "#005FAE"

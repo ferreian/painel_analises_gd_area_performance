@@ -1072,6 +1072,8 @@ def render_performance(df_filtrado, card, cores_mix, cores_cultura, COR_SOJA, CO
     def _dl_btn(df_out, fname, key):
         """Download Excel via openpyxl."""
         import io as _io
+        # Remove colunas internas do AgGrid (::auto_unique_id::, _selectedRowNodeInfo, etc.)
+        df_out = df_out.loc[:, ~df_out.columns.str.startswith("::") & ~df_out.columns.str.startswith("_")].copy()
         _buf = _io.BytesIO()
         df_out.to_excel(_buf, index=False, engine="openpyxl")
         _buf.seek(0)
@@ -1092,7 +1094,7 @@ def render_performance(df_filtrado, card, cores_mix, cores_cultura, COR_SOJA, CO
             </h2>
             <p style="font-size:14px;color:#6B7280;margin:0;">
                 Compare materiais STINE contra a concorrência nos municípios em que ambos foram avaliados simultaneamente.
-                O cruzamento é feito pela <strong>média de sc/ha por município</strong>.
+                O cruzamento é feito pela <strong>média de sc/ha por município</strong>. Mínimo de <strong>3 municípios</strong> compartilhados para o confronto aparecer.
             </p>
         </div>
     """, unsafe_allow_html=True)
@@ -1196,9 +1198,12 @@ def render_performance(df_filtrado, card, cores_mix, cores_cultura, COR_SOJA, CO
                         _p1_sel = _df_p1_agg[_df_p1_agg[_COL_MAT] == _p1_t1][["municipio_uf", "sc_ha"]].rename(columns={"sc_ha": "sc_ha_1"})
                         _cross  = _df_p2_agg.merge(_p1_sel, on="municipio_uf", how="inner")
 
+                        _MIN_COMP = 3
                         _rows_t1 = []
                         for _prod2, _grp in _cross.groupby(_COL_MAT):
                             _n   = len(_grp)
+                            if _n < _MIN_COMP:
+                                continue
                             _d   = _grp["sc_ha_1"] - _grp["sc_ha"]
                             _vit = int((_d > _EMPATE_H2H).sum())
                             _emp = int((_d.abs() <= _EMPATE_H2H).sum())
@@ -1262,7 +1267,7 @@ A comparação usa a **média de sc/ha por município** — se houver mais de um
 
 - **SCs/ha Prod 1 / Prod 2** → médias de produtividade *apenas nos municípios compartilhados*
 - **Qtd. Vitórias** → municípios em que Prod 1 superou Prod 2 por mais de 1 sc/ha
-- **N° Municípios** → total de municípios com ambos avaliados
+- **N° Municípios** → total de municípios com ambos avaliados (mínimo 3 para o confronto aparecer)
 - **% Vitórias** → Vitórias ÷ Municípios × 100 — base da classificação
 - **Dif. %** → quanto Prod 1 produz a mais ou a menos em termos relativos
 - **Dif. (SC)** → diferença absoluta média em sc/ha
@@ -1344,9 +1349,12 @@ A comparação usa a **média de sc/ha por município** — se houver mais de um
 
                 # Restringe P2 aos concorrentes com ao menos 1 município em comum com P1
                 _munic_p1_t2 = set(_df_p1_agg[_df_p1_agg[_COL_MAT] == _p1_t2]["municipio_uf"].dropna())
-                _adv_disp_t2 = sorted(
-                    _df_p2_agg[_df_p2_agg["municipio_uf"].isin(_munic_p1_t2)][_COL_MAT].dropna().unique()
+                # Só adversários com >= 3 municípios em comum
+                _adv_counts = (
+                    _df_p2_agg[_df_p2_agg["municipio_uf"].isin(_munic_p1_t2)]
+                    .groupby(_COL_MAT)["municipio_uf"].count()
                 )
+                _adv_disp_t2 = sorted(_adv_counts[_adv_counts >= 3].index.tolist())
 
                 with _col_p2t2:
                     if _adv_disp_t2:

@@ -987,3 +987,667 @@ def render_performance(df_filtrado, card, cores_mix, cores_cultura, COR_SOJA, CO
                     font=dict(color="black"),
                 )
                 st.plotly_chart(fig_geo, use_container_width=True)
+
+
+    # ════════════════════════════════════════════════════════
+    # HEAD-TO-HEAD POR MUNICÍPIO
+    # ════════════════════════════════════════════════════════
+    import numpy as _np
+    from st_aggrid import (
+        AgGrid as _AgGrid,
+        GridOptionsBuilder as _GB,
+        GridUpdateMode as _GUM,
+        JsCode as _Js,
+    )
+
+    # ── Constantes ──────────────────────────────────────────────────────────────
+    _EMPATE_H2H  = 1.0
+    _COR_VIT     = "#27AE60"
+    _COR_EMP     = "#FFFF00"
+    _COR_DER     = "#FF0000"
+    _COR_EMP_CRD = "#D4A800"
+
+    def _classificar_h2h(pct):
+        if pd.isna(pct):  return "—",               "#F3F4F6"
+        if pct <= 45:     return "Restrito",         "#FF0000"
+        elif pct <= 55:   return "Competitivo",      "#FFFF00"
+        elif pct <= 75:   return "Superior",         "#87CEFF"
+        else:             return "Alta Performance", "#90EE90"
+
+    def _ag_h2h(df_in: pd.DataFrame, height: int = 480):
+        """AgGrid com coluna Classe colorida — idêntico ao modelo H2H."""
+        _cjs = _Js("""
+        function(params) {
+            const v = params.value;
+            if (v === 'Alta Performance') return {'backgroundColor':'#90EE90','color':'#1A1A1A','fontWeight':'700','textAlign':'center'};
+            if (v === 'Superior')         return {'backgroundColor':'#87CEFF','color':'#1A1A1A','fontWeight':'700','textAlign':'center'};
+            if (v === 'Competitivo')      return {'backgroundColor':'#FFFF00','color':'#1A1A1A','fontWeight':'700','textAlign':'center'};
+            if (v === 'Restrito')         return {'backgroundColor':'#FF0000','color':'#FFFFFF','fontWeight':'700','textAlign':'center'};
+            return {};
+        }
+        """)
+        _gb = _GB.from_dataframe(df_in)
+        _gb.configure_default_column(
+            resizable=True, sortable=True, filter=True,
+            suppressMenu=False,
+            menuTabs=["generalMenuTab", "filterMenuTab", "columnsMenuTab"],
+            cellStyle={"fontSize": "13px", "color": "#000000", "fontFamily": "Helvetica Neue, sans-serif"},
+        )
+        if "Classe" in df_in.columns:
+            _gb.configure_column("Classe", cellStyle=_cjs, minWidth=140)
+        _gb.configure_grid_options(
+            headerHeight=36, rowHeight=32, domLayout="normal",
+            suppressMenuHide=True, suppressColumnVirtualisation=True,
+            suppressContextMenu=False, enableRangeSelection=True,
+        )
+        _go = _gb.build()
+        _go["defaultColDef"]["headerClass"] = "ag-header-black"
+        _go["onFirstDataRendered"] = _Js("function(params){params.api.sizeColumnsToFit();}")
+        _AgGrid(
+            df_in, gridOptions=_go, height=height,
+            update_mode=_GUM.NO_UPDATE,
+            fit_columns_on_grid_load=False,
+            columns_auto_size_mode=2,
+            allow_unsafe_jscode=True,
+            enable_enterprise_modules=True,
+            custom_css={
+                ".ag-header":                       {"background-color": "#4A4A4A !important"},
+                ".ag-header-row":                   {"background-color": "#4A4A4A !important"},
+                ".ag-header-cell":                  {"background-color": "#4A4A4A !important"},
+                ".ag-header-cell-label":            {"color": "#FFFFFF !important", "font-weight": "700"},
+                ".ag-header-cell-text":             {"color": "#FFFFFF !important", "font-size": "13px !important", "font-weight": "700 !important"},
+                ".ag-icon":                         {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                ".ag-header-icon":                  {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                ".ag-header-cell-menu-button":      {"opacity": "1 !important", "visibility": "visible !important"},
+                ".ag-header-cell-menu-button span": {"color": "#FFFFFF !important"},
+                ".ag-icon-menu":                    {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                ".ag-icon-filter":                  {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                ".ag-cell":                         {"font-size": "13px !important"},
+                ".ag-row":                          {"font-size": "13px !important"},
+            },
+            theme="streamlit",
+            use_container_width=True,
+        )
+
+    def _dl_btn(df_out, fname, key):
+        """Download Excel via openpyxl."""
+        import io as _io
+        _buf = _io.BytesIO()
+        df_out.to_excel(_buf, index=False, engine="openpyxl")
+        _buf.seek(0)
+        st.download_button(
+            "⬇️ Exportar Excel", data=_buf.read(),
+            file_name=fname + ".xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=key,
+        )
+
+    # ── Título da seção ─────────────────────────────────────────────────────────
+    st.markdown("""
+        <div style="margin:48px 0 20px 0;border-top:2px solid #E5E7EB;padding-top:32px;">
+            <p style="font-size:11px;font-weight:700;color:#6B7280;text-transform:uppercase;
+                      letter-spacing:0.1em;margin:0 0 2px;">HEAD-TO-HEAD</p>
+            <h2 style="font-size:1.6rem;font-weight:700;color:#1A1A1A;margin:0 0 6px;line-height:1.2;">
+                Análise Head-to-Head por Município
+            </h2>
+            <p style="font-size:14px;color:#6B7280;margin:0;">
+                Compare materiais STINE contra a concorrência nos municípios em que ambos foram avaliados simultaneamente.
+                O cruzamento é feito pela <strong>média de sc/ha por município</strong>.
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # ── Preparar base ────────────────────────────────────────────────────────────
+    _COL_MAT = "tratamentos_nome"
+    _df_base = df_filtrado[
+        (df_filtrado["status_ensaio"] == "Com Resultado") &
+        (df_filtrado["resultado_prod_scha_corrigido"].notna())
+    ].copy()
+
+    if _COL_MAT not in _df_base.columns or _df_base.empty:
+        st.info("ℹ️ Sem dados de resultado para a análise Head-to-Head.")
+    else:
+        # municipio_uf
+        _est_col = "estado_sigla" if "estado_sigla" in _df_base.columns else "estado_nome"
+        _df_base["municipio_uf"] = (
+            _df_base["cidade_nome"].fillna("").str.strip()
+            + " — "
+            + _df_base[_est_col].fillna("").str.strip()
+        )
+
+        # Filtro de cultura
+        _col_cf, _ = st.columns([2, 5])
+        with _col_cf:
+            _cults = sorted(_df_base["cultura_nome"].dropna().unique())
+            _cult  = st.selectbox(
+                "Cultura", options=_cults,
+                index=_cults.index("Soja") if "Soja" in _cults else 0,
+                key="h2h_gd_cultura",
+            )
+
+        _df_cult = _df_base[_df_base["cultura_nome"] == _cult].copy()
+
+        # Pools por categoria
+        _df_p1_raw = _df_cult[_df_cult["categoria_material"] == "STINE"]
+        _df_p2_raw = _df_cult[_df_cult["categoria_material"] == "Concorrência"]
+
+        # Médias por (material, municipio_uf)
+        def _agg(df_in):
+            return (
+                df_in.groupby([_COL_MAT, "municipio_uf"], as_index=False)
+                ["resultado_prod_scha_corrigido"].mean()
+                .rename(columns={"resultado_prod_scha_corrigido": "sc_ha"})
+            )
+
+        _df_p1_agg = _agg(_df_p1_raw)
+        _df_p2_agg = _agg(_df_p2_raw)
+
+        _cultivares_p1 = sorted(_df_p1_agg[_COL_MAT].dropna().unique())
+
+        if not _cultivares_p1:
+            st.warning("⚠️ Nenhum material STINE com resultado para a cultura selecionada.")
+        elif _df_p2_agg.empty:
+            st.warning("⚠️ Nenhum material de concorrência com resultado para a cultura selecionada.")
+        else:
+            # Contexto para subtítulo (safra + município)
+            _safras_ctx = sorted(_df_cult["ano_safra"].dropna().unique()) if "ano_safra" in _df_cult.columns else []
+            _n_munic_ctx = _df_cult["municipio_uf"].nunique()
+            _n_areas_ctx = len(_df_cult)
+            _filtros_ctx = []
+            if _safras_ctx:
+                _filtros_ctx.append(" / ".join(str(s) for s in _safras_ctx))
+            if sel_cultura != "Todos":
+                _filtros_ctx.append(sel_cultura)
+            _filtros_ctx.append(f"{_n_munic_ctx} municípios · {_n_areas_ctx} áreas")
+            _ctx_base = "  ·  ".join(_filtros_ctx)
+
+            # ════════════════════════════════════════════════
+            # TABS
+            # ════════════════════════════════════════════════
+            _tab1, _tab2 = st.tabs(["📋  Tabela de Classificação", "📊  Análise por Município"])
+
+            # ════════════════════════════════════════════════
+            # TAB 1 — Tabela de Classificação
+            # ════════════════════════════════════════════════
+            with _tab1:
+                st.markdown("""
+                    <div style="margin:16px 0 8px 0;">
+                        <p style="font-size:11px;font-weight:700;color:#6B7280;text-transform:uppercase;
+                                  letter-spacing:0.05em;margin:0 0 2px;">HEAD-TO-HEAD · TABELA</p>
+                        <p style="font-size:1.1rem;font-weight:600;color:#1A1A1A;margin:0 0 4px;">Classificação vs Adversários</p>
+                        <p style="font-size:13px;color:#6B7280;margin:0;">
+                            Escolha o Produto 1 (STINE) e veja como ele se comporta contra cada adversário
+                            nos municípios em que ambos foram avaliados.
+                        </p>
+                    </div>
+                """, unsafe_allow_html=True)
+
+                _col_s1, _col_b1 = st.columns([4, 1])
+                with _col_s1:
+                    _p1_t1 = st.selectbox("Produto 1 (STINE)", _cultivares_p1, key="h2h_gd_p1_t1")
+                with _col_b1:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    _btn_t1 = st.button("▶ Rodar Análise", type="primary", key="btn_h2h_t1", use_container_width=True)
+
+                _key_t1 = f"h2h_t1__{_p1_t1}__{_cult}"
+
+                if _btn_t1:
+                    with st.spinner("Calculando confrontos..."):
+                        _p1_sel = _df_p1_agg[_df_p1_agg[_COL_MAT] == _p1_t1][["municipio_uf", "sc_ha"]].rename(columns={"sc_ha": "sc_ha_1"})
+                        _cross  = _df_p2_agg.merge(_p1_sel, on="municipio_uf", how="inner")
+
+                        _rows_t1 = []
+                        for _prod2, _grp in _cross.groupby(_COL_MAT):
+                            _n   = len(_grp)
+                            _d   = _grp["sc_ha_1"] - _grp["sc_ha"]
+                            _vit = int((_d > _EMPATE_H2H).sum())
+                            _emp = int((_d.abs() <= _EMPATE_H2H).sum())
+                            _pct = round(_vit / _n * 100, 1) if _n > 0 else _np.nan
+                            _s1  = _grp["sc_ha_1"].mean()
+                            _s2  = _grp["sc_ha"].mean()
+                            _dsc = round(_s1 - _s2, 1) if not (_np.isnan(_s1) or _np.isnan(_s2)) else None
+                            _dpt = round(((_s1 / _s2) - 1) * 100, 1) if _s2 and not _np.isnan(_s2) else None
+                            _cls, _cor = _classificar_h2h(_pct)
+                            _rows_t1.append({
+                                "Produto 1":     _p1_t1,
+                                "SCs/ha Prod 1": round(_s1, 1),
+                                "Produto 2":     _prod2,
+                                "SCs/ha Prod 2": round(_s2, 1),
+                                "Qtd. Vitórias": _vit,
+                                "N° Municípios": _n,
+                                "Dif. %":        _dpt,
+                                "Dif. (SC)":     _dsc,
+                                "% Vitórias":    _pct,
+                                "Classe":        _cls,
+                                "_cor":          _cor,
+                            })
+
+                        _df_t1 = pd.DataFrame(_rows_t1)
+                        if not _df_t1.empty:
+                            _df_t1 = _df_t1.sort_values("% Vitórias", ascending=False).reset_index(drop=True)
+                        st.session_state[_key_t1] = _df_t1
+
+                if _key_t1 in st.session_state:
+                    _df_t1 = st.session_state[_key_t1]
+                    if _df_t1.empty:
+                        st.info("ℹ️ Nenhum confronto encontrado — o cultivar não compartilha municípios com os adversários disponíveis.")
+                    else:
+                        _n_adv = len(_df_t1)
+                        st.markdown(
+                            f'<div style="margin:0.5rem 0 0.2rem;">'
+                            f'<p style="font-size:13px;font-weight:600;color:#6B7280;text-transform:uppercase;'
+                            f'letter-spacing:0.05em;margin:0 0 4px;">Análise H2H · Produto 1</p>'
+                            f'<h2 style="font-size:1.9rem;font-weight:700;color:#1A1A1A;margin:0;line-height:1.2;">'
+                            f'<span style="color:#27AE60;">{_p1_t1}</span>'
+                            f'<span style="font-size:1rem;font-weight:500;color:#6B7280;margin-left:10px;">'
+                            f'STINE · {_n_adv} adversários</span></h2>'
+                            f'<p style="font-size:14px;color:#6B7280;margin:4px 0 0;">{_ctx_base}</p>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+                        # Popover
+                        with st.popover("ℹ️ Como interpretar esta tabela", use_container_width=False):
+                            st.markdown("""
+**📌 O que esta tabela mostra**
+
+Cada linha é um confronto direto entre o **Produto 1 (STINE)** e um adversário, calculado exclusivamente nos municípios onde **ambos foram avaliados simultaneamente**.
+
+A comparação usa a **média de sc/ha por município** — se houver mais de uma área do mesmo material no município, calcula-se a média.
+
+---
+
+**📐 Como ler as colunas**
+
+- **SCs/ha Prod 1 / Prod 2** → médias de produtividade *apenas nos municípios compartilhados*
+- **Qtd. Vitórias** → municípios em que Prod 1 superou Prod 2 por mais de 1 sc/ha
+- **N° Municípios** → total de municípios com ambos avaliados
+- **% Vitórias** → Vitórias ÷ Municípios × 100 — base da classificação
+- **Dif. %** → quanto Prod 1 produz a mais ou a menos em termos relativos
+- **Dif. (SC)** → diferença absoluta média em sc/ha
+
+> ⚠️ **Empate**: diferença de até **±1 sc/ha** não é contabilizada como vitória nem derrota.
+
+---
+
+**🎨 Legenda das cores — % de Vitórias**
+""")
+                            _ca, _cb, _cc, _cd = st.columns(4)
+                            _ca.markdown('<div style="background:#90EE90;border-radius:6px;padding:8px;text-align:center;"><b style="color:#1A1A1A;">Alta Performance</b><br><span style="font-size:12px;color:#1A1A1A;">&gt; 75% de vitórias</span></div>', unsafe_allow_html=True)
+                            _cb.markdown('<div style="background:#87CEFF;border-radius:6px;padding:8px;text-align:center;"><b style="color:#1A1A1A;">Superior</b><br><span style="font-size:12px;color:#1A1A1A;">56 – 75% de vitórias</span></div>', unsafe_allow_html=True)
+                            _cc.markdown('<div style="background:#FFFF00;border-radius:6px;padding:8px;text-align:center;"><b style="color:#1A1A1A;">Competitivo</b><br><span style="font-size:12px;color:#1A1A1A;">46 – 55% de vitórias</span></div>', unsafe_allow_html=True)
+                            _cd.markdown('<div style="background:#FF0000;border-radius:6px;padding:8px;text-align:center;"><b style="color:#FFFFFF;">Restrito</b><br><span style="font-size:12px;color:#FFFFFF;">≤ 45% de vitórias</span></div>', unsafe_allow_html=True)
+                            st.markdown("""
+---
+
+**💡 Como interpretar**
+
+- **Alta Performance** → Prod 1 vence em mais de 3/4 dos municípios — material consistentemente superior
+- **Superior** → vence na maioria dos municípios — boa performance geral
+- **Competitivo** → resultado equilibrado — nenhum material se destaca claramente
+- **Restrito** → Prod 1 perde na maioria dos municípios — atenção ao posicionamento
+""")
+
+                        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+                        # Mini-resumo por classe
+                        _cnt_cls = _df_t1["Classe"].value_counts()
+                        _tot_cls = len(_df_t1)
+                        _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+                        for _col_ui, _lbl, _cort in zip(
+                            [_mc1, _mc2, _mc3, _mc4],
+                            ["Alta Performance", "Superior", "Competitivo", "Restrito"],
+                            ["#27AE60", "#1E40AF", "#F2C811", "#FF0000"],
+                        ):
+                            _ncls = int(_cnt_cls.get(_lbl, 0))
+                            _pct_cl = f"{_ncls / _tot_cls * 100:.0f}%" if _tot_cls > 0 else "—"
+                            _col_ui.markdown(
+                                f'<div style="border:1px solid #E5E7EB;border-radius:10px;padding:10px 14px;'
+                                f'background:#FFFFFF;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.07);">'
+                                f'<p style="margin:0;font-size:14px;font-weight:600;color:#374151;">{_lbl}</p>'
+                                f'<p style="margin:4px 0 0;font-size:2.2rem;font-weight:700;color:{_cort};">'
+                                f'{_ncls} <span style="font-size:1.2rem;font-weight:500;">({_pct_cl})</span></p>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+                        # AgGrid
+                        _df_show_t1 = _df_t1.drop(columns=["_cor"], errors="ignore")
+                        _ag_h2h(_df_show_t1, height=min(680, int((36 + 32 * len(_df_show_t1) + 20) * 1.3)))
+
+                        _dl_btn(_df_show_t1, f"h2h_{_p1_t1}_{_cult}", "dl_h2h_t1")
+
+                else:
+                    st.info("👆 Selecione o Produto 1 e clique em **▶ Rodar Análise** para calcular.")
+
+            # ════════════════════════════════════════════════
+            # TAB 2 — Análise por Município
+            # ════════════════════════════════════════════════
+            with _tab2:
+                st.markdown("""
+                    <div style="margin:16px 0 8px 0;">
+                        <p style="font-size:11px;font-weight:700;color:#6B7280;text-transform:uppercase;
+                                  letter-spacing:0.05em;margin:0 0 2px;">HEAD-TO-HEAD · GRÁFICO</p>
+                        <p style="font-size:1.1rem;font-weight:600;color:#1A1A1A;margin:0 0 4px;">Diferença de Produtividade por Município</p>
+                        <p style="font-size:13px;color:#6B7280;margin:0;">
+                            Selecione um par específico e veja a diferença de sc/ha em cada município compartilhado.
+                        </p>
+                    </div>
+                """, unsafe_allow_html=True)
+
+                _col_p1t2, _col_p2t2, _col_bt2 = st.columns([2, 2, 1])
+
+                with _col_p1t2:
+                    _p1_t2 = st.selectbox("Produto 1 (STINE)", _cultivares_p1, key="h2h_gd_p1_t2")
+
+                # Restringe P2 aos concorrentes com ao menos 1 município em comum com P1
+                _munic_p1_t2 = set(_df_p1_agg[_df_p1_agg[_COL_MAT] == _p1_t2]["municipio_uf"].dropna())
+                _adv_disp_t2 = sorted(
+                    _df_p2_agg[_df_p2_agg["municipio_uf"].isin(_munic_p1_t2)][_COL_MAT].dropna().unique()
+                )
+
+                with _col_p2t2:
+                    if _adv_disp_t2:
+                        _p2_t2 = st.selectbox("Produto 2 (adversário)", _adv_disp_t2, key="h2h_gd_p2_t2")
+                    else:
+                        st.warning("Nenhum adversário com municípios em comum para este cultivar.")
+                        _p2_t2 = None
+
+                with _col_bt2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    _btn_t2 = st.button("▶ Rodar Análise", type="primary", key="btn_h2h_t2", use_container_width=True)
+
+                _key_t2 = f"h2h_t2__{_p1_t2}__{_p2_t2}__{_cult}"
+
+                if _btn_t2 and _p2_t2:
+                    with st.spinner("Calculando..."):
+                        _d1_loc = _df_p1_agg[_df_p1_agg[_COL_MAT] == _p1_t2][["municipio_uf", "sc_ha"]].rename(columns={"sc_ha": "sc_ha_1"})
+                        _d2_loc = _df_p2_agg[_df_p2_agg[_COL_MAT] == _p2_t2][["municipio_uf", "sc_ha"]].rename(columns={"sc_ha": "sc_ha_2"})
+                        _df_loc = _d1_loc.merge(_d2_loc, on="municipio_uf", how="inner").copy()
+                        _df_loc["sc_ha_1"] = pd.to_numeric(_df_loc["sc_ha_1"], errors="coerce")
+                        _df_loc["sc_ha_2"] = pd.to_numeric(_df_loc["sc_ha_2"], errors="coerce")
+                        _df_loc["diff_sc"]   = _df_loc["sc_ha_1"] - _df_loc["sc_ha_2"]
+                        _df_loc["resultado"] = _df_loc["diff_sc"].apply(
+                            lambda x: "Vitória" if x > _EMPATE_H2H
+                            else ("Empate" if abs(x) <= _EMPATE_H2H else "Derrota")
+                        )
+                        _df_loc = _df_loc.sort_values("diff_sc").reset_index(drop=True)
+                        st.session_state[_key_t2] = _df_loc
+
+                if _key_t2 in st.session_state and _p2_t2:
+                    _df_loc = st.session_state[_key_t2].copy()
+                    for _nc in ["sc_ha_1", "sc_ha_2", "diff_sc"]:
+                        if _nc in _df_loc.columns:
+                            _df_loc[_nc] = pd.to_numeric(_df_loc[_nc], errors="coerce")
+
+                    if _df_loc.empty:
+                        st.info("ℹ️ Nenhum município compartilhado encontrado para este par.")
+                    else:
+                        _n_loc  = len(_df_loc)
+                        _n_vit  = int((_df_loc["resultado"] == "Vitória").sum())
+                        _n_emp  = int((_df_loc["resultado"] == "Empate").sum())
+                        _n_der  = int((_df_loc["resultado"] == "Derrota").sum())
+                        _vsc    = _df_loc.loc[_df_loc["resultado"] == "Vitória",  "diff_sc"]
+                        _dsc    = _df_loc.loc[_df_loc["resultado"] == "Derrota",  "diff_sc"]
+                        _max_v  = float(_vsc.max())  if len(_vsc) > 0 else _np.nan
+                        _med_v  = float(_vsc.mean()) if len(_vsc) > 0 else _np.nan
+                        _min_d  = float(_dsc.min())  if len(_dsc) > 0 else _np.nan
+                        _med_d  = float(_dsc.mean()) if len(_dsc) > 0 else _np.nan
+
+                        # Título dinâmico
+                        _ctx_t2 = _ctx_base + f"  ·  {_n_loc} municípios compartilhados"
+                        st.markdown(
+                            f'<div style="margin:0.5rem 0 0.2rem;">'
+                            f'<p style="font-size:13px;font-weight:600;color:#6B7280;text-transform:uppercase;'
+                            f'letter-spacing:0.05em;margin:0 0 4px;">Análise H2H · Confronto Direto</p>'
+                            f'<h2 style="font-size:1.9rem;font-weight:700;color:#1A1A1A;margin:0;line-height:1.2;">'
+                            f'<span style="color:#27AE60;">{_p1_t2}</span>'
+                            f'<span style="font-size:0.85rem;font-weight:500;color:#6B7280;margin-left:6px;">STINE</span>'
+                            f'<span style="font-size:1.1rem;font-weight:500;color:#6B7280;margin:0 12px;">vs</span>'
+                            f'<span style="color:#1A1A1A;">{_p2_t2}</span>'
+                            f'<span style="font-size:0.85rem;font-weight:500;color:#6B7280;margin-left:6px;">Concorrência</span>'
+                            f'</h2>'
+                            f'<p style="font-size:14px;color:#6B7280;margin:4px 0 0;">{_ctx_t2}</p>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+                        # Popovers
+
+
+                        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+                        # Cards compactos
+                        _pct_vit = f"{_n_vit / _n_loc * 100:.0f}%" if _n_loc > 0 else "—"
+                        _pct_emp = f"{_n_emp / _n_loc * 100:.0f}%" if _n_loc > 0 else "—"
+                        _pct_der = f"{_n_der / _n_loc * 100:.0f}%" if _n_loc > 0 else "—"
+                        _card_css = (
+                            "border:1px solid #E5E7EB;border-radius:10px;"
+                            "padding:12px 16px;background:#FFFFFF;text-align:center;"
+                            "box-shadow:0 1px 4px rgba(0,0,0,0.07);"
+                        )
+                        _cc1, _cc2, _cc3, _cc4 = st.columns(4)
+
+                        with _cc1:
+                            st.markdown(
+                                f'<div style="{_card_css}">'
+                                f'<p style="margin:0;font-size:12px;color:#6B7280;">📍 Municípios avaliados</p>'
+                                f'<p style="margin:6px 0 0;font-size:1.9rem;font-weight:700;color:#1A1A1A;">{_n_loc}</p>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                        with _cc2:
+                            _sub_v = (
+                                f'<p style="margin:2px 0;font-size:14px;font-weight:600;color:{_COR_VIT};">Max: {_max_v:+.1f} sc/ha</p>'
+                                f'<p style="margin:0;font-size:14px;font-weight:600;color:{_COR_VIT};">Média: {_med_v:+.1f} sc/ha</p>'
+                            ) if not _np.isnan(_max_v) else '<p style="margin:2px 0;font-size:14px;">&nbsp;</p><p style="margin:0;font-size:14px;">&nbsp;</p>'
+                            st.markdown(
+                                f'<div style="{_card_css}border-top:3px solid {_COR_VIT};">'
+                                f'<p style="margin:0;font-size:15px;font-weight:700;color:#1A1A1A;">✅ Vitórias</p>'
+                                f'{_sub_v}'
+                                f'<p style="margin:6px 0;font-size:1.9rem;font-weight:700;color:{_COR_VIT};">'
+                                f'{_n_vit} <span style="font-size:1rem;font-weight:600;">({_pct_vit})</span></p>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                        with _cc3:
+                            st.markdown(
+                                f'<div style="{_card_css}border-top:3px solid {_COR_EMP_CRD};">'
+                                f'<p style="margin:0;font-size:15px;font-weight:700;color:#1A1A1A;">— Empates</p>'
+                                f'<p style="margin:2px 0;font-size:14px;font-weight:600;color:{_COR_EMP_CRD};">Entre ±1 sc/ha</p>'
+                                f'<p style="margin:0;font-size:14px;">&nbsp;</p>'
+                                f'<p style="margin:6px 0;font-size:1.9rem;font-weight:700;color:{_COR_EMP_CRD};">'
+                                f'{_n_emp} <span style="font-size:1rem;font-weight:600;">({_pct_emp})</span></p>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                        with _cc4:
+                            _sub_d = (
+                                f'<p style="margin:2px 0;font-size:14px;font-weight:600;color:{_COR_DER};">Min: {_min_d:+.1f} sc/ha</p>'
+                                f'<p style="margin:0;font-size:14px;font-weight:600;color:{_COR_DER};">Média: {_med_d:+.1f} sc/ha</p>'
+                            ) if not _np.isnan(_min_d) else '<p style="margin:2px 0;font-size:14px;">&nbsp;</p><p style="margin:0;font-size:14px;">&nbsp;</p>'
+                            st.markdown(
+                                f'<div style="{_card_css}border-top:3px solid {_COR_DER};">'
+                                f'<p style="margin:0;font-size:15px;font-weight:700;color:#1A1A1A;">✕ Derrotas</p>'
+                                f'{_sub_d}'
+                                f'<p style="margin:6px 0;font-size:1.9rem;font-weight:700;color:{_COR_DER};">'
+                                f'{_n_der} <span style="font-size:1rem;font-weight:600;">({_pct_der})</span></p>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                        st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+
+                        # Donut + Tabela de municípios por resultado (no lugar do mapa)
+                        _col_donut, _col_tab = st.columns([1, 2])
+
+                        with _col_donut:
+                            _fig_d = go.Figure(go.Pie(
+                                labels=["Vitórias", "Empates", "Derrotas"],
+                                values=[_n_vit, _n_emp, _n_der],
+                                hole=0.55,
+                                marker_colors=[_COR_VIT, _COR_EMP, _COR_DER],
+                                textinfo="label+percent",
+                                textposition="outside",
+                                textfont=dict(size=12, family="Helvetica Neue, sans-serif", color="#111111"),
+                                hovertemplate="%{label}: %{value} município(s) (%{percent})<extra></extra>",
+                                sort=False,
+                                pull=[0.03, 0.03, 0.03],
+                                domain=dict(x=[0.15, 0.85], y=[0.05, 0.90]),
+                            ))
+                            _fig_d.update_layout(
+                                title=dict(
+                                    text="Resultado Geral do Head",
+                                    font=dict(size=13, color="#111111"),
+                                    x=0.5, xanchor="center", y=0.99, yanchor="top",
+                                ),
+                                showlegend=False,
+                                height=420,
+                                margin=dict(t=80, b=20, l=60, r=60),
+                                paper_bgcolor="#FFFFFF",
+                                font=dict(family="Helvetica Neue, sans-serif"),
+                            )
+                            st.plotly_chart(_fig_d, use_container_width=True)
+
+                        # Altura compartilhada entre AgGrid e gráfico de barras
+                        _shared_h = 36 + 32 * _n_loc + 20
+
+                        with _col_tab:
+                            st.markdown(
+                                '<p style="font-size:13px;font-weight:600;color:#4A4A4A;margin:0 0 8px;">📍 Municípios por Resultado</p>',
+                                unsafe_allow_html=True,
+                            )
+                            _df_munic = _df_loc[["municipio_uf", "sc_ha_1", "sc_ha_2", "diff_sc", "resultado"]].copy()
+                            _df_munic["sc_ha_1"] = pd.to_numeric(_df_munic["sc_ha_1"], errors="coerce").round(1)
+                            _df_munic["sc_ha_2"] = pd.to_numeric(_df_munic["sc_ha_2"], errors="coerce").round(1)
+                            _df_munic["diff_sc"] = pd.to_numeric(_df_munic["diff_sc"],  errors="coerce").round(1)
+                            _df_munic = (
+                                _df_munic
+                                .sort_values("diff_sc", ascending=False)
+                                .rename(columns={
+                                    "municipio_uf": "Município",
+                                    "sc_ha_1":      f"SCs/ha {_p1_t2}",
+                                    "sc_ha_2":      f"SCs/ha {_p2_t2}",
+                                    "diff_sc":      "Dif. (SC)",
+                                    "resultado":    "Resultado",
+                                })
+                                .reset_index(drop=True)
+                            )
+                            _res_js = _Js("""
+                            function(params) {
+                                const v = params.value;
+                                if (v === 'Vitória') return {'backgroundColor':'#27AE60','color':'#FFFFFF','fontWeight':'700','textAlign':'center'};
+                                if (v === 'Empate')  return {'backgroundColor':'#FFFF00','color':'#1A1A1A','fontWeight':'700','textAlign':'center'};
+                                if (v === 'Derrota') return {'backgroundColor':'#FF0000','color':'#FFFFFF','fontWeight':'700','textAlign':'center'};
+                                return {};
+                            }
+                            """)
+                            _gb_m = _GB.from_dataframe(_df_munic)
+                            _gb_m.configure_default_column(
+                                resizable=True, sortable=True, filter=True,
+                                suppressMenu=False,
+                                menuTabs=["generalMenuTab", "filterMenuTab", "columnsMenuTab"],
+                                cellStyle={"fontSize": "13px", "color": "#000000", "fontFamily": "Helvetica Neue, sans-serif"},
+                            )
+                            _gb_m.configure_column("Resultado", cellStyle=_res_js, minWidth=110)
+                            _gb_m.configure_grid_options(
+                                headerHeight=36, rowHeight=32, domLayout="normal",
+                                suppressMenuHide=True, suppressColumnVirtualisation=True,
+                                suppressContextMenu=False, enableRangeSelection=True,
+                            )
+                            _go_m = _gb_m.build()
+                            _go_m["defaultColDef"]["headerClass"] = "ag-header-black"
+                            _go_m["onFirstDataRendered"] = _Js("function(params){params.api.sizeColumnsToFit();}")
+                            _AgGrid(
+                                _df_munic,
+                                gridOptions=_go_m,
+                                height=_shared_h,
+                                update_mode=_GUM.NO_UPDATE,
+                                fit_columns_on_grid_load=False,
+                                columns_auto_size_mode=2,
+                                allow_unsafe_jscode=True,
+                                enable_enterprise_modules=True,
+                                custom_css={
+                                    ".ag-header":                       {"background-color": "#4A4A4A !important"},
+                                    ".ag-header-row":                   {"background-color": "#4A4A4A !important"},
+                                    ".ag-header-cell":                  {"background-color": "#4A4A4A !important"},
+                                    ".ag-header-cell-label":            {"color": "#FFFFFF !important", "font-weight": "700"},
+                                    ".ag-header-cell-text":             {"color": "#FFFFFF !important", "font-size": "13px !important", "font-weight": "700 !important"},
+                                    ".ag-icon":                         {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                                    ".ag-header-icon":                  {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                                    ".ag-header-cell-menu-button":      {"opacity": "1 !important", "visibility": "visible !important"},
+                                    ".ag-header-cell-menu-button span": {"color": "#FFFFFF !important"},
+                                    ".ag-icon-menu":                    {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                                    ".ag-icon-filter":                  {"color": "#FFFFFF !important", "opacity": "1 !important"},
+                                    ".ag-cell":                         {"font-size": "13px !important"},
+                                    ".ag-row":                          {"font-size": "13px !important"},
+                                },
+                                theme="streamlit",
+                                use_container_width=True,
+                            )
+                        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+                        # Gráfico de barras horizontais — mesma altura da tabela
+                        _cores_bar = _df_loc["resultado"].map({
+                            "Vitória": _COR_VIT,
+                            "Empate":  _COR_EMP,
+                            "Derrota": _COR_DER,
+                        }).tolist()
+
+                        _fig_b = go.Figure(go.Bar(
+                            x=_df_loc["diff_sc"].round(1),
+                            y=_df_loc["municipio_uf"],
+                            orientation="h",
+                            marker_color=_cores_bar,
+                            text=_df_loc["diff_sc"].round(1),
+                            textposition="outside",
+                            textfont=dict(size=11, color="#111111"),
+                            hovertemplate="<b>%{y}</b><br>Diferença: %{x:+.1f} sc/ha<extra></extra>",
+                        ))
+                        _fig_b.add_vline(x=0, line_color="#333333", line_width=2)
+                        _fig_b.update_layout(
+                            title=dict(
+                                text=f"Diferença de Produtividade por Município — {_p1_t2} × {_p2_t2}",
+                                font=dict(size=13, color="#111111"),
+                            ),
+                            xaxis=dict(
+                                title="Diferença (sc/ha)",
+                                tickfont=dict(size=11, color="#111111"),
+                                zerolinecolor="#CCCCCC",
+                            ),
+                            yaxis=dict(
+                                title="Município",
+                                tickfont=dict(size=11, color="#111111"),
+                            ),
+                            height=_shared_h,
+                            margin=dict(t=50, b=50, l=200, r=100),
+                            plot_bgcolor="#FFFFFF",
+                            paper_bgcolor="#FFFFFF",
+                            font=dict(family="Helvetica Neue, sans-serif", size=12, color="#111111"),
+                        )
+                        st.plotly_chart(_fig_b, use_container_width=True)
+
+                        # Tabela expansível
+                        with st.expander("📋 Ver tabela de dados por município"):
+                            _df_exp = _df_loc[["municipio_uf", "sc_ha_1", "sc_ha_2", "diff_sc", "resultado"]].copy()
+                            _df_exp["sc_ha_1"] = pd.to_numeric(_df_exp["sc_ha_1"], errors="coerce").round(1)
+                            _df_exp["sc_ha_2"] = pd.to_numeric(_df_exp["sc_ha_2"], errors="coerce").round(1)
+                            _df_exp["diff_sc"] = pd.to_numeric(_df_exp["diff_sc"],  errors="coerce").round(1)
+                            _df_exp.columns = [
+                                "Município",
+                                f"SCs/ha — {_p1_t2}",
+                                f"SCs/ha — {_p2_t2}",
+                                "Diferença (sc/ha)",
+                                "Resultado",
+                            ]
+                            st.dataframe(_df_exp, hide_index=True, use_container_width=True)
+                            _dl_btn(_df_exp, f"h2h_municipio_{_p1_t2}_vs_{_p2_t2}", "dl_h2h_t2")
+
+                else:
+                    st.info("👆 Selecione os dois cultivares e clique em **▶ Rodar Análise** para calcular.")

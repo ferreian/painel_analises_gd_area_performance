@@ -8,8 +8,35 @@ import plotly.express as px
 import plotly.graph_objects as go
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
+# ── Noindex: impede indexação pelo Google ────────────────
+def _injetar_noindex():
+    try:
+        index_path = Path(st.__file__).parent / "static" / "index.html"
+        html = index_path.read_text()
+        if 'name="robots"' not in html:
+            html = html.replace(
+                "<head>",
+                '<head><meta name="robots" content="noindex, nofollow">'
+            )
+            index_path.write_text(html)
+    except Exception:
+        pass
+
+_injetar_noindex()
+
 # ── Configuração da página ───────────────────────────────
 st.set_page_config(layout="wide", page_title="Dashboard GD - Stine")
+
+# ── Gate de acesso por token ─────────────────────────────
+try:
+    _token_esperado = st.secrets["ACCESS_TOKEN"]
+except Exception:
+    _token_esperado = os.getenv("ACCESS_TOKEN")
+
+_token_url = st.query_params.get("token", "")
+if not _token_esperado or _token_url != _token_esperado:
+    st.error("Acesso restrito. Utilize o aplicativo oficial para acessar este painel.")
+    st.stop()
 
 # ── Inicializa session state ─────────────────────────────
 if "limpar" not in st.session_state:
